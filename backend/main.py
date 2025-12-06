@@ -1,61 +1,89 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import json
 from bson import json_util
 from contextlib import asynccontextmanager
+import sys
+import os
 
-from config import PORT
-from src.db import db
-from src.recommender import GameRecommender
+# Add current directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Initialize recommender globally
+# Import your config and modules
+try:
+    from config import PORT
+    from src.db import db
+    from src.recommender import GameRecommender
+except ImportError as e:
+    print(f"❌ Import error: {e}")
+    print("Make sure you have the following structure:")
+    print("  - src/db.py with MongoDB connection")
+    print("  - src/recommender.py with GameRecommender class")
+    print("  - config.py with PORT variable")
+    raise
+
+# Initialize recommender
 recommender = GameRecommender(db)
 
-# Pydantic models
+# Pydantic Models
 class SystemSpecs(BaseModel):
-    memory_gb: Optional[int] = None
-    storage_gb: Optional[int] = None
-    os_type: Optional[str] = None
+    memory_gb: Optional[int] = Field(None, ge=1, le=128, description="RAM in GB")
+    storage_gb: Optional[int] = Field(None, ge=1, le=2000, description="Storage in GB")
+    os_type: Optional[str] = Field(None, description="Operating system (windows, linux, mac)")
+    require_ssd: Optional[bool] = Field(False, description="SSD required")
 
 class UserPreferences(BaseModel):
-    max_price: float = 50.0
-    preferred_tags: List[str] = []
-    languages: List[str] = []
-    developers: List[str] = []
-    publishers: List[str] = []
-    system_specs: Optional[SystemSpecs] = None
+    max_price: float = Field(50.0, ge=0, le=1000, description="Maximum price in USD")
+    min_price: float = Field(0.0, ge=0, le=1000, description="Minimum price in USD")
+    preferred_tags: List[str] = Field(default_factory=list, description="Preferred game tags")
+    languages: List[str] = Field(default_factory=list, description="Required languages")
+    developers: List[str] = Field(default_factory=list, description="Preferred developers")
+    publishers: List[str] = Field(default_factory=list, description="Preferred publishers")
+    system_specs: Optional[SystemSpecs] = Field(None, description="System specifications")
+    min_sentiment: float = Field(0.0, ge=0, le=1, description="Minimum sentiment score (0-1)")
+    min_reviews: int = Field(0, ge=0, description="Minimum number of reviews")
 
-class RecommendationRequest(BaseModel):
+class ContentRequest(BaseModel):
+    cases: List[str] = Field(..., description="List of game titles to find similar games")
+    method: str = Field("cosine", description="Similarity method: cosine, pearson, euclidean, jaccard")
+    limit: int = Field(10, ge=1, le=50, description="Number of recommendations")
+
+class ConstraintRequest(BaseModel):
     preferences: UserPreferences
-    limit: int = 10
+    limit: int = Field(10, ge=1, le=50, description="Number of recommendations")
 
-# Lifespan handler
+class HybridRequest(BaseModel):
+    preferences: UserPreferences
+    cases: List[str] = Field(default_factory=list, description="Game titles to find similar games")
+    method: str = Field("cosine", description="Similarity method")
+    limit: int = Field(10, ge=1, le=50, description="Number of recommendations")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize on startup, cleanup on shutdown"""
+    """Lifespan context manager for startup/shutdown events"""
     print("🚀 Starting Game Recommendation API...")
-    print("📊 Loading recommendation model...")
-    
-    # Load pre-trained model or train new one
-    recommender.load_model()
-    
-    print("✅ Recommendation system ready!")
-    
+    print("📊 Loading recommendation models...")
+    success = recommender.load_models()
+    if success:
+        print("✅ All models loaded successfully!")
+    else:
+        print("⚠️ Model loading failed")
     yield
-    
-    print("👋 Shutting down...")
+    print("👋 Shutting down Recommendation API...")
 
 app = FastAPI(
     title="Game Recommendation API",
-    description="Knowledge-based game recommendation system",
-    version="3.0.0",
+    description="Professional game recommendation system with constraint-based, content-based, and hybrid methods",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan
 )
 
-# CORS
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,55 +93,85 @@ app.add_middleware(
 )
 
 def convert_mongo_data(data):
-    """Convert MongoDB documents to JSON"""
+    """Convert MongoDB data to JSON serializable format"""
     return json.loads(json_util.dumps(data))
 
 @app.get("/")
 def root():
+    """Root endpoint with API information"""
     return {
-        "message": "Game Recommendation API v3.0",
+        "message": "Game Recommendation API v1.0",
+        "description": "Professional RS with constraint-based, content-based, and hybrid methods",
         "status": "running",
+        "timestamp": datetime.now().isoformat(),
+        "methods": {
+            "knowledge_based": "Constraint-based filtering with hard/soft constraints",
+            "content_based": "Content similarity using 3 different metrics",
+            "hybrid": "Combines both constraint and content-based approaches"
+        },
+        "similarity_methods": [
+            {"name": "cosine", "description": "Cosine similarity between feature vectors"},
+            {"name": "pearson", "description": "Pearson correlation coefficient"},
+            {"name": "euclidean", "description": "Euclidean distance-based similarity"}
+        ],
         "endpoints": {
-            "GET /health": "Health check",
-            "GET /games": "Browse all games",
-            "GET /games/search": "Search by title",
-            "POST /games/filter": "Filter by criteria",
-            "POST /recommend": "Get personalized recommendations",
-            "GET /similar/{title}": "Find similar games",
-            "GET /stats": "Database statistics",
-            "GET /tags": "All available tags",
-            "GET /languages": "All supported languages",
-            "GET /developers": "All developers",
-            "POST /retrain": "Retrain recommendation model"
+            "GET /health": "Health check with model status",
+            "GET /games": "Browse all games with pagination",
+            "GET /games/search": "Search games by title",
+            "GET /games/{title}": "Get specific game details",
+            "POST /recommend/constraint": "Knowledge-based constraint recommendations",
+            "POST /recommend/content": "Content-based similarity recommendations",
+            "POST /recommend/hybrid": "Hybrid recommendations",
+            "GET /similar/{title}": "Find similar games to a specific game",
+            "GET /compare/{title}": "Compare all similarity methods",
+            "GET /stats": "Database and model statistics",
+            "GET /tags": "Get all available tags",
+            "GET /languages": "Get all supported languages",
+            "GET /developers": "Get all developers",
+            "GET /publishers": "Get all publishers",
+            "POST /retrain": "Retrain all models"
         }
     }
 
 @app.get("/health")
 def health_check():
+    """Health check endpoint"""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "games_loaded": len(recommender.games),
-        "model_trained": recommender.similarity_matrix is not None
+        "models_status": {
+            "cosine": len(recommender.top_k_similarities.get('cosine', {})) > 0,
+            "pearson": len(recommender.top_k_similarities.get('pearson', {})) > 0,
+            "euclidean": len(recommender.top_k_similarities.get('euclidean', {})) > 0,
+            "game_features": recommender.game_features is not None
+        },
+        "model_shape": {
+            "games": len(recommender.games),
+            "features": recommender.game_features.shape[1] if recommender.game_features is not None else 0
+        }
     }
 
 @app.get("/games")
 def get_games(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
-    sort_by: str = Query("popularity_score", enum=[
-        "popularity_score", "overall_sentiment_score", 
-        "original_price", "all_reviews_count", "title"
-    ]),
-    sort_order: int = Query(-1, enum=[1, -1])
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page"),
+    sort_by: str = Query("popularity_score", description="Field to sort by"),
+    sort_order: int = Query(-1, description="Sort order: 1 for ascending, -1 for descending")
 ):
-    """Get paginated games"""
+    """Get paginated list of games"""
     skip = (page - 1) * limit
     
-    games = list(db.steam_games.find(
-        {},
-        {"_id": 0}
-    ).sort(sort_by, sort_order).skip(skip).limit(limit))
+    # Validate sort field
+    valid_sort_fields = ["title", "popularity_score", "discounted_price", "release_year", 
+                         "overall_sentiment_score", "all_reviews_count"]
+    if sort_by not in valid_sort_fields:
+        sort_by = "popularity_score"
+    
+    games = list(db.steam_games.find({}, {"_id": 0})
+                 .sort(sort_by, sort_order)
+                 .skip(skip)
+                 .limit(limit))
     
     total = db.steam_games.count_documents({})
     
@@ -122,17 +180,21 @@ def get_games(
         "limit": limit,
         "total": total,
         "total_pages": (total + limit - 1) // limit,
+        "sort": {"by": sort_by, "order": sort_order},
         "games": convert_mongo_data(games)
     }
 
 @app.get("/games/search")
 def search_games(
-    q: str = Query(..., min_length=2),
-    limit: int = Query(20, ge=1, le=50)
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(20, ge=1, le=50, description="Maximum results")
 ):
     """Search games by title"""
     games = list(db.steam_games.find(
-        {"title_lower": {"$regex": q.lower(), "$options": "i"}},
+        {"$or": [
+            {"title": {"$regex": q, "$options": "i"}},
+            {"title_lower": {"$regex": q.lower()}}
+        ]},
         {"_id": 0}
     ).limit(limit))
     
@@ -142,227 +204,351 @@ def search_games(
         "games": convert_mongo_data(games)
     }
 
-@app.post("/games/filter")
-def filter_games(
-    tags: List[str] = [],
-    min_price: float = 0,
-    max_price: float = 1000,
-    languages: List[str] = [],
-    categories: List[str] = [],
-    limit: int = 20
-):
-    """Filter games by criteria"""
-    query = {}
-    
-    # Price
-    query["discounted_price"] = {"$gte": min_price, "$lte": max_price}
-    
-    # Tags
-    if tags:
-        query["tags"] = {"$in": [tag.lower() for tag in tags]}
-    
-    # Languages
-    if languages:
-        query["languages"] = {"$in": [lang.lower() for lang in languages]}
-    
-    # Categories
-    if categories:
-        query["categories"] = {"$in": [cat.lower() for cat in categories]}
-    
-    games = list(db.steam_games.find(
-        query,
+@app.get("/games/{title}")
+def get_game_by_title(title: str):
+    """Get specific game by title"""
+    game = db.steam_games.find_one(
+        {"$or": [
+            {"title": title},
+            {"title_lower": title.lower()}
+        ]},
         {"_id": 0}
-    ).sort("popularity_score", -1).limit(limit))
+    )
     
-    return {
-        "filters": {
-            "tags": tags,
-            "price_range": [min_price, max_price],
-            "languages": languages,
-            "categories": categories
-        },
-        "count": len(games),
-        "games": convert_mongo_data(games)
-    }
+    if not game:
+        raise HTTPException(status_code=404, detail=f"Game '{title}' not found")
+    
+    return {"game": convert_mongo_data(game)}
 
-@app.post("/recommend")
-def get_recommendations(request: RecommendationRequest):
-    """Get personalized game recommendations"""
+@app.post("/recommend/constraint")
+def constraint_based_recommendations(request: ConstraintRequest):
+    """KNOWLEDGE-BASED: Constraint-based recommendations"""
     try:
+        print(f"🔍 Processing constraint-based recommendation...")
+        
         # Convert preferences to dict
         prefs_dict = request.preferences.dict()
         
-        # Convert SystemSpecs to dict if present
-        if prefs_dict.get('system_specs'):
-            prefs_dict['system_specs'] = prefs_dict['system_specs']
-        
-        print(f"🎯 Preferences received: {prefs_dict}")
-        
-        recommendations = recommender.recommend_by_preferences(
-            prefs_dict,
-            request.limit
+        # Call constraint-based recommender
+        results = recommender.constraint_based_recommendations(
+            user_preferences=prefs_dict,
+            top_n=request.limit
         )
         
-        if not recommendations:
-            return {
-                "recommendations": [],
-                "count": 0,
-                "message": "No games match your criteria. Try adjusting your preferences."
-            }
+        if 'error' in results:
+            raise HTTPException(status_code=400, detail=results['error'])
         
-        # Format recommendations
-        formatted = []
-        for rec in recommendations:
-            game = rec['game']
-            explanations = recommender.get_explanation(game, rec['score_breakdown'])
-            
-            formatted.append({
-                "title": game.get("title"),
-                "price": game.get("discounted_price", game.get("original_price", 0)),
-                "original_price": game.get("original_price", 0),
-                "discount": game.get("discount_percentage", 0),
-                "score": round(rec['score'], 3),
-                "sentiment": game.get("overall_sentiment_score", 0.5),
-                "popularity": game.get("popularity_score", 0.3),
-                "reviews_count": game.get("all_reviews_count", 0),
-                "tags": game.get("tags", [])[:5],
-                "categories": game.get("categories", []),
-                "features": game.get("features", [])[:3],
-                "languages": game.get("languages", [])[:5],
-                "developer": game.get("developer"),
-                "publisher": game.get("publisher"),
-                "release_year": game.get("release_year"),
-                "link": game.get("link"),
-                "explanations": explanations,
-                "score_breakdown": rec['score_breakdown'],
-                "memory_gb": game.get("memory_gb"),
-                "storage_gb": game.get("storage_gb"),
-                "os_type": game.get("os_type")
-            })
+        # Handle new response format
+        perfect_matches_games = results.get('perfect_matches', {}).get('games', [])
+        good_matches_games = results.get('good_matches', {}).get('games', [])
+        partial_matches_games = results.get('partial_matches', {}).get('games', [])
         
         return {
-            "recommendations": formatted,
-            "count": len(formatted),
-            "preferences_used": prefs_dict
+            "method": "knowledge_based_constraint",
+            "timestamp": datetime.now().isoformat(),
+            "results": {
+                "perfect_matches": {
+                    "count": len(perfect_matches_games),
+                    "description": "Games that perfectly match all requirements (70%+ match)",
+                    "games": perfect_matches_games
+                },
+                "good_matches": {
+                    "count": len(good_matches_games),
+                    "description": "Games that match most requirements (50-69% match)",
+                    "games": good_matches_games
+                },
+                "partial_matches": {
+                    "count": len(partial_matches_games),
+                    "description": "Games that partially match requirements (30-49% match)",
+                    "games": partial_matches_games
+                }
+            },
+            "summary": {
+                "total_evaluated": results.get('total_evaluated', 0),
+                "perfect_match_percentage": round(len(perfect_matches_games) / max(1, results.get('total_evaluated', 1)) * 100, 1)
+            }
         }
-        
     except Exception as e:
-        print(f"❌ Recommendation error: {e}")
+        print(f"❌ Error in constraint-based recommendation: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/recommend/content")
+def content_based_recommendations(request: ContentRequest):
+    """CONTENT-BASED: Similarity-based recommendations"""
+    try:
+        print(f"🎯 Processing content-based recommendation with {request.method} similarity...")
+        
+        if not request.cases:
+            # Fallback to popular games
+            popular = recommender.get_popular_recommendations(request.limit)
+            return {
+                "method": "content_based",
+                "similarity_method": request.method,
+                "warning": "No cases provided. Showing popular games instead.",
+                "popular_recommendations": popular
+            }
+        
+        # Call content-based recommender
+        results = recommender.content_based_recommendations(
+            cases=request.cases,
+            method=request.method,
+            top_n=request.limit
+        )
+        
+        if 'error' in results:
+            raise HTTPException(status_code=400, detail=results['error'])
+        
+        # Handle new response format
+        highly_similar_games = results.get('highly_similar', {}).get('games', [])
+        moderately_similar_games = results.get('moderately_similar', {}).get('games', [])
+        somewhat_similar_games = results.get('somewhat_similar', {}).get('games', [])
+        
+        return {
+            "method": "content_based",
+            "timestamp": datetime.now().isoformat(),
+            "similarity_method": request.method,
+            "results": {
+                "highly_similar": {
+                    "count": len(highly_similar_games),
+                    "description": "Games very similar to your cases (70%+ similarity)",
+                    "games": highly_similar_games
+                },
+                "moderately_similar": {
+                    "count": len(moderately_similar_games),
+                    "description": "Games somewhat similar (40-69% similarity)",
+                    "games": moderately_similar_games
+                },
+                "somewhat_similar": {
+                    "count": len(somewhat_similar_games),
+                    "description": "Games with some similarity (20-39% similarity)",
+                    "games": somewhat_similar_games
+                }
+            },
+            "summary": {
+                "total_found": results.get('total_found', 0),
+                "method": request.method
+            }
+        }
+    except Exception as e:
+        print(f"❌ Error in content-based recommendation: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/recommend/hybrid")
+def hybrid_recommendations(request: HybridRequest):
+    """HYBRID: Combine constraint-based and content-based approaches"""
+    try:
+        print(f"🤝 Processing hybrid recommendation with {request.method} similarity...")
+        
+        # Convert preferences to dict
+        prefs_dict = request.preferences.dict()
+        
+        # Call hybrid recommender
+        results = recommender.hybrid_recommendations(
+            user_preferences=prefs_dict,
+            cases=request.cases,
+            method=request.method,
+            top_n=request.limit
+        )
+        
+        return {
+            "method": "hybrid",
+            "timestamp": datetime.now().isoformat(),
+            "similarity_method": request.method,
+            "description": "Combines knowledge-based constraint matching and content-based similarity",
+            "recommendations": results.get('recommendations', []),
+            "statistics": results.get('statistics', {})
+        }
+    except Exception as e:
+        print(f"❌ Error in hybrid recommendation: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/similar/{game_title}")
 def get_similar_games(
     game_title: str,
-    limit: int = Query(5, ge=1, le=20)
+    method: str = Query("cosine", description="Similarity method"),
+    limit: int = Query(10, ge=1, le=20, description="Number of similar games")
 ):
-    """Find similar games"""
+    """Get games similar to a specific game"""
     try:
-        recommendations = recommender.recommend_similar_games(game_title, limit)
+        # Use content-based with single case
+        results = recommender.content_based_recommendations(
+            cases=[game_title],
+            method=method,
+            top_n=limit
+        )
         
-        if not recommendations:
-            raise HTTPException(status_code=404, detail=f"Game '{game_title}' not found")
+        if 'error' in results:
+            raise HTTPException(status_code=404, detail=results['error'])
         
-        formatted = []
-        for rec in recommendations:
-            game = rec['game']
-            formatted.append({
-                "title": game.get("title"),
-                "similarity": round(rec['similarity_score'], 3),
-                "price": game.get("discounted_price", game.get("original_price", 0)),
-                "sentiment": game.get("overall_sentiment_score", 0.5),
-                "tags": game.get("tags", [])[:5],
-                "developer": game.get("developer")
-            })
+        # Combine all similarity levels
+        highly_similar = results.get('highly_similar', {}).get('games', [])
+        moderately_similar = results.get('moderately_similar', {}).get('games', [])
+        somewhat_similar = results.get('somewhat_similar', {}).get('games', [])
+        
+        all_similar = highly_similar + moderately_similar + somewhat_similar
         
         return {
             "source_game": game_title,
-            "recommendations": formatted,
-            "count": len(formatted)
+            "similarity_method": method,
+            "count": len(all_similar),
+            "similar_games": all_similar[:limit],
+            "similarity_distribution": {
+                "highly_similar": len(highly_similar),
+                "moderately_similar": len(moderately_similar),
+                "somewhat_similar": len(somewhat_similar)
+            }
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/compare/{game_title}")
+def compare_similarity_methods(
+    game_title: str,
+    limit: int = Query(5, ge=1, le=10, description="Recommendations per method")
+):
+    """Compare all similarity methods for a single game"""
+    try:
+        results = recommender.compare_similarity_methods(game_title, limit)
         
-    except HTTPException:
-        raise
+        if 'error' in results:
+            raise HTTPException(status_code=404, detail=results['error'])
+        
+        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/stats")
 def get_stats():
-    """Database statistics"""
-    total = db.steam_games.count_documents({})
-    
-    # Price stats
-    price_pipeline = [
-        {"$group": {
-            "_id": None,
-            "avg_price": {"$avg": "$discounted_price"},
-            "max_price": {"$max": "$discounted_price"},
-            "min_price": {"$min": "$discounted_price"},
-            "free_games": {"$sum": {"$cond": [{"$eq": ["$discounted_price", 0]}, 1, 0]}}
-        }}
-    ]
-    price_stats = list(db.steam_games.aggregate(price_pipeline))
-    
-    # Top tags
-    tag_pipeline = [
-        {"$unwind": "$tags"},
-        {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 20}
-    ]
-    top_tags = list(db.steam_games.aggregate(tag_pipeline))
-    
-    # Top languages
-    lang_pipeline = [
-        {"$unwind": "$languages"},
-        {"$group": {"_id": "$languages", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 10}
-    ]
-    top_languages = list(db.steam_games.aggregate(lang_pipeline))
-    
-    return {
-        "total_games": total,
-        "price_stats": price_stats[0] if price_stats else {},
-        "top_tags": top_tags,
-        "top_languages": top_languages
-    }
+    """Get database and model statistics"""
+    try:
+        # Basic counts
+        total_games = db.steam_games.count_documents({})
+        
+        # Price statistics
+        price_stats = list(db.steam_games.aggregate([
+            {"$group": {
+                "_id": None,
+                "avg_price": {"$avg": "$discounted_price"},
+                "max_price": {"$max": "$discounted_price"},
+                "min_price": {"$min": "$discounted_price"},
+                "free_games": {"$sum": {"$cond": [{"$eq": ["$discounted_price", 0]}, 1, 0]}}
+            }}
+        ]))
+        
+        # Tag statistics
+        tag_stats = list(db.steam_games.aggregate([
+            {"$unwind": "$tags"},
+            {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 20}
+        ]))
+        
+        # Developer statistics
+        dev_stats = list(db.steam_games.aggregate([
+            {"$group": {"_id": "$developer", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 15}
+        ]))
+        
+        return {
+            "database": {
+                "total_games": total_games,
+                "price_statistics": price_stats[0] if price_stats else {},
+                "top_tags": tag_stats,
+                "top_developers": dev_stats
+            },
+            "model": {
+                "games_loaded": len(recommender.games),
+                "feature_dimensions": recommender.game_features.shape[1] if recommender.game_features is not None else 0,
+                "similarity_methods_loaded": {
+                    "cosine": len(recommender.top_k_similarities.get('cosine', {})) > 0,
+                    "pearson": len(recommender.top_k_similarities.get('pearson', {})) > 0,
+                    "euclidean": len(recommender.top_k_similarities.get('euclidean', {})) > 0
+                }
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/tags")
-def get_tags():
-    """Get all unique tags"""
-    tags = db.steam_games.distinct("tags")
-    return {"tags": sorted(tags), "count": len(tags)}
+def get_tags(
+    limit: int = Query(100, ge=1, le=500, description="Maximum tags to return"),
+    min_count: int = Query(1, ge=1, description="Minimum occurrences")
+):
+    """Get all available tags with counts"""
+    pipeline = [
+        {"$unwind": "$tags"},
+        {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gte": min_count}}},
+        {"$sort": {"count": -1}},
+        {"$limit": limit}
+    ]
+    
+    tags = list(db.steam_games.aggregate(pipeline))
+    
+    return {
+        "tags": convert_mongo_data(tags),
+        "total_unique": len(tags)
+    }
 
 @app.get("/languages")
 def get_languages():
     """Get all supported languages"""
     languages = db.steam_games.distinct("languages")
-    return {"languages": sorted(languages), "count": len(languages)}
+    return {
+        "languages": sorted([lang for lang in languages if lang]),
+        "count": len(languages)
+    }
 
 @app.get("/developers")
-def get_developers():
+def get_developers(
+    limit: int = Query(100, ge=1, le=500, description="Maximum developers to return")
+):
     """Get all developers"""
     developers = db.steam_games.distinct("developer")
-    return {"developers": sorted([d for d in developers if d]), "count": len(developers)}
+    filtered = [d for d in developers if d]
+    return {
+        "developers": sorted(filtered)[:limit],
+        "count": len(filtered)
+    }
 
 @app.get("/publishers")
-def get_publishers():
+def get_publishers(
+    limit: int = Query(100, ge=1, le=500, description="Maximum publishers to return")
+):
     """Get all publishers"""
     publishers = db.steam_games.distinct("publisher")
-    return {"publishers": sorted([p for p in publishers if p]), "count": len(publishers)}
+    filtered = [p for p in publishers if p]
+    return {
+        "publishers": sorted(filtered)[:limit],
+        "count": len(filtered)
+    }
 
 @app.post("/retrain")
 def retrain_model():
-    """Retrain the recommendation model"""
+    """Retrain all recommendation models"""
     try:
-        recommender.train_and_save_model()
-        return {
-            "status": "success",
-            "message": "Model retrained successfully",
-            "games_count": len(recommender.games)
-        }
+        print("🔄 Retraining all models...")
+        success = recommender.train_models()
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "All models retrained successfully",
+                "timestamp": datetime.now().isoformat(),
+                "details": {
+                    "games_count": len(recommender.games),
+                    "models_trained": ["cosine", "pearson", "euclidean"]
+                }
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Model training failed")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
