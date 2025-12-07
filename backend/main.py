@@ -152,15 +152,31 @@ def health_check():
         }
     }
 
+
 @app.get("/games")
 def get_games(
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     sort_by: str = Query("popularity_score", description="Field to sort by"),
-    sort_order: int = Query(-1, description="Sort order: 1 for ascending, -1 for descending")
+    sort_order: int = Query(-1, description="Sort order: 1 for ascending, -1 for descending"),
+    game_type: Optional[str] = Query(None, description="Filter by game type: all, free, discount, paid")
 ):
-    """Get paginated list of games"""
+    """Get paginated list of games with filtering"""
     skip = (page - 1) * limit
+    
+    # Build filter query
+    filter_query = {}
+    
+    # Add game type filter
+    if game_type and game_type != 'all':
+        if game_type == 'free':
+            filter_query["discounted_price"] = {"$eq": 0}
+        elif game_type == 'discount':
+            filter_query["discount_percentage"] = {"$gt": 0}
+            filter_query["discounted_price"] = {"$gt": 0}  # Not free
+        elif game_type == 'paid':
+            filter_query["discount_percentage"] = {"$eq": 0}
+            filter_query["discounted_price"] = {"$gt": 0}  # Not free, no discount
     
     # Validate sort field
     valid_sort_fields = ["title", "popularity_score", "discounted_price", "release_year", 
@@ -168,12 +184,14 @@ def get_games(
     if sort_by not in valid_sort_fields:
         sort_by = "popularity_score"
     
-    games = list(db.steam_games.find({}, {"_id": 0})
+    # Get games with filter
+    games = list(db.steam_games.find(filter_query, {"_id": 0})
                  .sort(sort_by, sort_order)
                  .skip(skip)
                  .limit(limit))
     
-    total = db.steam_games.count_documents({})
+    # Get total count with filter
+    total = db.steam_games.count_documents(filter_query)
     
     return {
         "page": page,
@@ -181,28 +199,45 @@ def get_games(
         "total": total,
         "total_pages": (total + limit - 1) // limit,
         "sort": {"by": sort_by, "order": sort_order},
+        "game_type": game_type,
         "games": convert_mongo_data(games)
     }
 
 @app.get("/games/search")
 def search_games(
     q: str = Query(..., min_length=1, description="Search query"),
-    limit: int = Query(20, ge=1, le=50, description="Maximum results")
+    limit: int = Query(20, ge=1, le=50, description="Maximum results"),
+    game_type: Optional[str] = Query(None, description="Filter by game type: all, free, discount, paid")
 ):
-    """Search games by title"""
-    games = list(db.steam_games.find(
-        {"$or": [
+    """Search games by title with game type filter"""
+    # Build base search query
+    search_query = {
+        "$or": [
             {"title": {"$regex": q, "$options": "i"}},
             {"title_lower": {"$regex": q.lower()}}
-        ]},
-        {"_id": 0}
-    ).limit(limit))
+        ]
+    }
+    
+    # Add game type filter if specified
+    if game_type and game_type != 'all':
+        if game_type == 'free':
+            search_query["discounted_price"] = {"$eq": 0}
+        elif game_type == 'discount':
+            search_query["discount_percentage"] = {"$gt": 0}
+            search_query["discounted_price"] = {"$gt": 0}
+        elif game_type == 'paid':
+            search_query["discount_percentage"] = {"$eq": 0}
+            search_query["discounted_price"] = {"$gt": 0}
+    
+    games = list(db.steam_games.find(search_query, {"_id": 0}).limit(limit))
     
     return {
         "query": q,
+        "game_type": game_type,
         "count": len(games),
         "games": convert_mongo_data(games)
     }
+
 
 @app.get("/games/{title}")
 def get_game_by_title(title: str):
@@ -219,6 +254,7 @@ def get_game_by_title(title: str):
         raise HTTPException(status_code=404, detail=f"Game '{title}' not found")
     
     return {"game": convert_mongo_data(game)}
+
 
 @app.post("/recommend/constraint")
 def constraint_based_recommendations(request: ConstraintRequest):
