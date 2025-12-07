@@ -1,10 +1,11 @@
 # SteamMind – Game Engine Recommendation System #
 
-A professional game recommendation system using **knowledge-based (constraint-based)** and **content-based filtering**, built with **FastAPI** and **MongoDB**.
+SteamMind is an advanced game recommendation platform that leverages both **knowledge-based (constraint-driven)** and **content-based filtering** techniques to provide personalized game suggestions. Built with **FastAPI** and **MongoDB**, the system combines sophisticated similarity metrics, user preferences, and game metadata to deliver accurate and explainable recommendations for gamers.
+
 ---
 
-Dataset Used: https://www.kaggle.com/datasets/nikatomashvili/steam-games-dataset
----
+**Dataset Used:** [Steam Games Dataset](https://www.kaggle.com/datasets/nikatomashvili/steam-games-dataset)
+
 
 ## 📋 Features
 
