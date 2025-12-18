@@ -30,6 +30,8 @@ Four similarity metrics:
 ### 🤝 Hybrid Recommendations
 - Intelligent combination of constraint + content-based systems
 - Dynamic weighting based on match quality
+- penalty system if recommendation only appear in one list - 10% for constraint, 20% for content
+- average weight calculation based on similarity if rrecommended game appear in both lists
 
 ---
 
