@@ -31,7 +31,7 @@ Four similarity metrics:
 - Intelligent combination of constraint + content-based systems
 - Dynamic weighting based on match quality
 - penalty system if recommendation only appear in one list - 10% for constraint, 20% for content
-- average weight calculation based on similarity if rrecommended game appear in both lists
+- average weight calculation based on similarity if recommended game appear in both lists
 
 ---
 
