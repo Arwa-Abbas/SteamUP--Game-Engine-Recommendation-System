@@ -15,9 +15,9 @@ SteamUP! is an advanced game recommendation platform that leverages both **knowl
 - System requirements matching (RAM, storage, OS)
 - Language preferences
 - Developer/publisher preferences
-- Sentiment score filtering
+- Sentiment score and recent reviews filtering (highest sentiment and review score gets priority)
 - Tag-based matching
-- Score-based ranking with explanations
+- Score-based ranking 
 
 ### 🎯 Content-Based Recommendations
 Four similarity metrics:
@@ -48,7 +48,24 @@ Game Recommendation System
    ├── requirements.txt
    └── config.py
    └── .env
-
+ ├──frontend
+ 📁 node_modules
+ 📁 public
+   📁 src/
+   ├── 📁 components/
+   │ ├── GameDetailModel.js
+   │ ├── GameDetailModel.css
+   │ └── GameLoadingScreen.jsx
+   ├── 📁 services/
+   │ ├── api.js
+   ├── 📁 styles/
+   │ ├── animations.css
+   ├── App.js
+   ├── App.css
+   └── index.js
+   └── index.css
+   └── package.json
+   └── webpack.config.js
 ```
 
 
